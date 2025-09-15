@@ -1,5 +1,5 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
 
 from transformer.a.decoder import Decoder
 from transformer.a.encoder import Encoder
