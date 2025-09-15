@@ -18,8 +18,8 @@ class Transformer(nn.Module):
                  num_layers,
                  dropout):
         super(Transformer, self).__init__()
-        self.encoder = Encoder(enc_vocab_size, max_len, ffn_hidden, num_heads, num_layers, dropout)
-        self.decoder = Decoder(dec_vocab_size, max_len, ffn_hidden, num_heads, num_layers, dropout)
+        self.encoder = Encoder(enc_vocab_size, max_len, d_model, ffn_hidden, num_heads, num_layers, dropout)
+        self.decoder = Decoder(dec_vocab_size, max_len, d_model, ffn_hidden, num_heads, num_layers, dropout)
 
         self.src_pad_ix = src_pad_ix
         self.trg_pad_ix = trg_pad_ix
