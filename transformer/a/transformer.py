@@ -40,7 +40,7 @@ class Transformer(nn.Module):
 
     def forward(self, src, trg):
         s_mask = self.make_pad_mask(src, src, self.src_pad_ix, self.src_pad_ix)
-        t_mask = self.make_pad_mask(trg, trg, self.trg_pad_ix, self.trg_pad_ix) * self.make_casual_mask(trg, trg)
+        t_mask = self.make_pad_mask(trg, trg, self.trg_pad_ix, self.trg_pad_ix) * self.make_casual_mask(trg, trg) # 逻辑与
         enc = self.encoder(src, s_mask)
         out = self.decoder(trg, enc, t_mask, s_mask)
         return out
