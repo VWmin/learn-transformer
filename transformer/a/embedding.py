@@ -7,7 +7,7 @@ class TokenEmbedding(nn.Embedding):
 
     def __init__(self, vocab_size, d_model):
         # 索引为1的token是填充符号
-        super().__init__(vocab_size, d_model, padding_idx=1)
+        super(TokenEmbedding, self).__init__(vocab_size, d_model, padding_idx=1)
 
 class PositionalEmbedding(nn.Module):
     """
@@ -17,7 +17,7 @@ class PositionalEmbedding(nn.Module):
     """
 
     def __init__(self, d_model, max_len):
-        super().__init__()
+        super(PositionalEmbedding, self).__init__()
         self.PE = torch.zeros(max_len, d_model)
         self.PE.requires_grad = False #
         pos = (torch.arange(0, max_len).reshape(-1, 1)
@@ -32,7 +32,7 @@ class PositionalEmbedding(nn.Module):
 
 class TransformerEmbedding(nn.Module):
     def __init__(self, vocab_size, d_model, max_len, dropout):
-        super().__init__()
+        super(TransformerEmbedding, self).__init__()
         self.token_embed = TokenEmbedding(vocab_size, d_model)
         self.pos_embed = PositionalEmbedding(d_model, max_len)
         self.dropout = nn.Dropout(dropout)
