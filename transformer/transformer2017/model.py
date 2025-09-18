@@ -2,6 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class LayerNorm(nn.Module):
@@ -17,14 +18,21 @@ class LayerNorm(nn.Module):
     """
 
     def __init__(self, d_model, eps=1e-6):
+        """
+
+        :param d_model: 嵌入向量维度，或者特征维度
+        :param eps: 极小值，防止除零
+        """
         super(LayerNorm, self).__init__()
+        # 为什么一个初始为全1，一个初始为全0？TODO
         self.gamma = nn.Parameter(torch.ones(d_model))
-        self.beta = nn.Parameter(torch.ones(d_model))
+        self.beta = nn.Parameter(torch.zeros(d_model))
         self.eps = eps
 
     def forward(self, x):
         mean = x.mean(-1, keepdim=True)
-        var = x.var(-1, keepdim=True)
+        # 默认无偏估计是打开，为什么要关闭？TODO
+        var = x.var(-1, keepdim=True, unbiased=False)
         x = (x - mean) / math.sqrt(var + self.eps)
         x = self.gamma * x + self.beta
         return x
@@ -43,8 +51,10 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     def __init__(self, max_len, d_model, dropout=0.1):
         """
-        max_len: 上下文长度
-        d_model: 嵌入向量维度，或者特征维度
+
+        :param max_len: 上下文长度
+        :param d_model: 嵌入向量维度，或者特征维度
+        :param dropout: 丢弃概率
         """
         super(SinusoidalPositionalEncoding, self).__init__()
         pos = torch.arange(max_len).reshape(-1, 1)  # shape [max_len, 1]
@@ -58,12 +68,18 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     def forward(self, x):
         _, seq_len = x.size()
-        x = x + self.PE[:seq_len, :]
-        return self.dropout(x)
+        pe = self.PE[:seq_len, :].unsqueeze(0) # [bath_size, seq_len, d_model]
+        return self.dropout(pe)
 
 
 class Attention(nn.Module):
     def __init__(self, d_model, num_heads, dropout=0.1):
+        """
+
+        :param d_model: 嵌入向量维度，或者特征维度
+        :param num_heads: 注意力头数量
+        :param dropout: 丢弃概率
+        """
         super(Attention, self).__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -84,10 +100,10 @@ class Attention(nn.Module):
         # out 投影后的 dropout
         self.out_dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask=None):
+    def forward(self, q, k, v, mask=None):
         # 原本的形状是 [batch_size, seq_len, d_model]
-        batch_size, seq_len = x.size()
-        xq, xk, xv = self.q_proj(x), self.k_proj(x), self.v_proj(x)
+        batch_size, seq_len, d_model = q.size()
+        xq, xk, xv = self.q_proj(q), self.k_proj(k), self.v_proj(v)
         # 调整成多头注意力需要的形状 [batch_size, seq_len, num_heads, head_dim]
         xq = xq.view(batch_size, seq_len, self.num_heads, self.head_dim)
         xk = xk.view(batch_size, seq_len, self.num_heads, self.head_dim)
@@ -96,7 +112,228 @@ class Attention(nn.Module):
         xq = xq.permute(0, 2, 1, 3)
         xk = xk.permute(0, 2, 1, 3)
         xv = xv.permute(0, 2, 1, 3)
+        # @ 对最后两个维度做矩阵乘法，因此转置替换最后两个维度
+        # scores 维度是 [batch_size, num_heads, seq_len, seq_len]
+        scores = xq @ xk.transpose(-2, -1) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float('-inf'))
+        scores = F.softmax(scores, dim=-1)
+        # 防止依赖特定的模式
+        scores = self.attn_dropout(scores)
+        # output 维度是 [batch_size, num_heads, seq_len, head_dim]
+        output = scores @ xv
+        # 转换后 output 维度是 [batch_size, seq_len, num_heads, head_dim]
+        output = output.permute(0, 2, 1, 3).contiguous()
+        # 最终 output 需要回到初始形状
+        output = output.view(batch_size, seq_len, d_model)
+        # 对多头结果做整合 [batch_zie, seq_len, d_model] * [d_model, d_model]
+        output = self.o_proj(output)
+        # 防止依赖单一头或局部特征
+        output = self.out_dropout(output)
+        return output
 
-        pattern = xq @ xk.transpose(2, 3) / torch.sqrt(self.head_dim)
+
+class FeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, dropout=0.1):
+        """
+
+        :param d_model: 嵌入向量维度，或者特征维度
+        :param d_ff: 隐藏层维度
+        :param dropout: 丢弃概率
+        """
+        super(FeedForward, self).__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.dropout = nn.Dropout(dropout)
+        # 上投影矩阵，映射到一个隐藏层维度
+        # 已经包含了bias
+        self.fc1 = nn.Linear(d_model, d_ff)
+        # 下投影矩阵，回到特征维度
+        self.fc2 = nn.Linear(d_ff, d_model)
+
+        # Xavier 初始化权重
+        # 其原理是调整初始权重范围，与输入和输出的方差保持一致，加快模型收敛
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = F.gelu(x)
+        # dropout 放在激活函数之后
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
 
 
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        super(EncoderLayer, self).__init__()
+        self.attn = Attention(d_model, num_heads, dropout)
+        self.ff = FeedForward(d_model, d_ff, dropout)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+
+        # 残差连接之后，layer norm 之前
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, x, s_mask):
+        _x = x
+        x = self.attn(x, x, x, s_mask)
+        # 先残差 + dropout，再 norm。下同
+        x = self.dropout1(x + _x)
+        x = self.norm1(x)
+        _x = x
+        x = self.ff(x)
+        x = self.dropout2(x + _x)
+        x = self.norm2(x)
+        return x
+
+
+class Encoder(nn.Module):
+    def __init__(self, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+        super(Encoder, self).__init__()
+        self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
+        self.layers = nn.ModuleList([EncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
+
+    def forward(self, x, s_mask):
+        x = x + self.pos_embed(x)
+        for layer in self.layers:
+            x = layer(x, s_mask)
+        return x
+
+
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        super(DecoderLayer, self).__init__()
+        self.attn = Attention(d_model, num_heads, dropout)
+        self.cross_attn = Attention(d_model, num_heads, dropout)
+        self.ff = FeedForward(d_model, d_ff, dropout)
+
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm3 = LayerNorm(d_model)
+
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+
+    def forward(self, x, enc, t_mask):
+        _x = x
+        x = self.attn(x, x, x, t_mask)
+        x = self.dropout1(x + _x)
+        x = self.norm1(x)
+
+        _x = x
+        x = self.cross_attn(x, enc, enc, t_mask)
+        x = self.dropout2(x + _x)
+        x = self.norm2(x)
+
+        _x = x
+        x = self.ff(x)
+        x = self.dropout3(x + _x)
+        x = self.norm3(x)
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+        super(Decoder, self).__init__()
+        self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
+        self.layers = nn.ModuleList([DecoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
+
+    def forward(self, x, enc, t_mask):
+        x = x + self.pos_embed(x)
+        for layer in self.layers:
+            x = layer(x, enc, t_mask)
+        return x
+
+
+class EncoderDecoder(nn.Module):
+    def __init__(self,
+                 src_pad_ix,
+                 tgt_pad_ix,
+                 d_model,
+                 max_len,
+                 num_heads,
+                 d_ff,
+                 num_layers,
+                 dropout=0.1):
+        super(EncoderDecoder, self).__init__()
+        self.src_pad_ix = src_pad_ix
+        self.tgt_pad_ix = tgt_pad_ix
+        self.encoder = Encoder(d_model, max_len, num_heads, d_ff, num_layers, dropout)
+        self.decoder = Decoder(d_model, max_len, num_heads, d_ff, num_layers, dropout)
+
+    @staticmethod
+    def make_padding_mask(q, k, pad_idx_q, pad_idx_k):
+        len_q, len_k = q.size(1), k.size(1)
+        q = q.ne(pad_idx_q).unsqueeze(1).unsqueeze(3)
+        q = q.repeat(1, 1, 1, len_k)
+        k = k.ne(pad_idx_k).unsqueeze(1).unsqueeze(3)
+        k = k.repeat(1, 1, 1, len_q)
+        mask = q & k
+        return mask
+
+    @staticmethod
+    def make_casual_mask(q, k):
+        len_q, len_k = q.size(1), k.size(1)
+        mask = torch.triu(torch.ones(len_q, len_k, dtype=torch.bool))
+        # [1, 1, len_q, len_k]
+        mask = mask.unsqueeze(0).unsqueeze(1)
+        return mask
+
+    def forward(self, src, tgt):
+        s_mask = self.make_padding_mask(src, src, self.src_pad_ix, self.src_pad_ix)
+        t_mask = self.make_padding_mask(tgt, tgt, self.tgt_pad_ix, self.tgt_pad_ix) & self.make_casual_mask(tgt, tgt)
+        enc = self.encoder(src, s_mask)
+        dec = self.decoder(tgt, enc, t_mask)
+        return dec
+
+
+# ==== Demo ====
+if __name__ == '__main__':
+    batch_size = 2
+    src_len = 6
+    tgt_len = 5
+    d_model = 16
+    num_heads = 4
+    d_ff = 64
+    num_layers = 2
+    max_len = 10
+
+    # 假设词表大小
+    vocab_size_src = 20
+    vocab_size_tgt = 30
+    src_pad_ix = 0
+    tgt_pad_ix = 0
+
+    # 随机生成输入（int 类型，表示 token index）
+    src = torch.randint(1, vocab_size_src, (batch_size, src_len))
+    tgt = torch.randint(1, vocab_size_tgt, (batch_size, tgt_len))
+
+    # pad 部分填 0
+    src[0, -1] = src_pad_ix
+    tgt[1, -2:] = tgt_pad_ix
+
+    # 初始化模型
+    model = EncoderDecoder(
+        src_pad_ix=src_pad_ix,
+        tgt_pad_ix=tgt_pad_ix,
+        d_model=d_model,
+        max_len=max_len,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        num_layers=num_layers,
+        dropout=0.1
+    )
+
+    # 前向计算
+    out = model(src, tgt)
+
+    print("源序列输入:", src.shape)  # [batch_size, src_len]
+    print("目标序列输入:", tgt.shape)  # [batch_size, tgt_len]
+    print("模型输出:", out.shape)  # [batch_size, tgt_len, d_model]
