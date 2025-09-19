@@ -33,7 +33,7 @@ class LayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         # 默认无偏估计是打开，为什么要关闭？TODO
         var = x.var(-1, keepdim=True, unbiased=False)
-        x = (x - mean) / math.sqrt(var + self.eps)
+        x = (x - mean) / torch.sqrt(var + self.eps)
         x = self.gamma * x + self.beta
         return x
 
@@ -68,7 +68,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     def forward(self, x):
         _, seq_len = x.size()
-        pe = self.PE[:seq_len, :].unsqueeze(0) # [bath_size, seq_len, d_model]
+        pe = self.PE[:seq_len, :].unsqueeze(0)  # [1, seq_len, d_model]，实际相加时，1会广播到对方的 batch_size 维度
         return self.dropout(pe)
 
 
@@ -102,31 +102,33 @@ class Attention(nn.Module):
 
     def forward(self, q, k, v, mask=None):
         # 原本的形状是 [batch_size, seq_len, d_model]
-        batch_size, seq_len, d_model = q.size()
+        # 交叉注意力时，q来自decoder，kv来自encoder，此时两者seq_len可能不等长
+        batch_size, tgt_len, d_model = q.size()
+        _, src_len, _ = k.size()
         xq, xk, xv = self.q_proj(q), self.k_proj(k), self.v_proj(v)
         # 调整成多头注意力需要的形状 [batch_size, seq_len, num_heads, head_dim]
-        xq = xq.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        xk = xk.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        xv = xv.view(batch_size, seq_len, self.num_heads, self.head_dim)
+        xq = xq.view(batch_size, tgt_len, self.num_heads, self.head_dim)
+        xk = xk.view(batch_size, src_len, self.num_heads, self.head_dim)
+        xv = xv.view(batch_size, src_len, self.num_heads, self.head_dim)
         # 调整下维度顺序，方便做batch矩阵运算 [batch_size, num_heads, seq_len, head_dim]
         xq = xq.permute(0, 2, 1, 3)
         xk = xk.permute(0, 2, 1, 3)
         xv = xv.permute(0, 2, 1, 3)
         # @ 对最后两个维度做矩阵乘法，因此转置替换最后两个维度
-        # scores 维度是 [batch_size, num_heads, seq_len, seq_len]
+        # scores 维度是 [batch_size, num_heads, tgt_len, src_len]
         scores = xq @ xk.transpose(-2, -1) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float('-inf'))
         scores = F.softmax(scores, dim=-1)
         # 防止依赖特定的模式
         scores = self.attn_dropout(scores)
-        # output 维度是 [batch_size, num_heads, seq_len, head_dim]
+        # output 维度是 [batch_size, num_heads, tgt_len, head_dim]
         output = scores @ xv
-        # 转换后 output 维度是 [batch_size, seq_len, num_heads, head_dim]
+        # 转换后 output 维度是 [batch_size, tgt_len, num_heads, head_dim]
         output = output.permute(0, 2, 1, 3).contiguous()
         # 最终 output 需要回到初始形状
-        output = output.view(batch_size, seq_len, d_model)
-        # 对多头结果做整合 [batch_zie, seq_len, d_model] * [d_model, d_model]
+        output = output.view(batch_size, tgt_len, d_model)
+        # 对多头结果做整合 [batch_zie, tgt_len, d_model] * [d_model, d_model]
         output = self.o_proj(output)
         # 防止依赖单一头或局部特征
         output = self.out_dropout(output)
@@ -194,13 +196,14 @@ class EncoderLayer(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+    def __init__(self, vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
         super(Encoder, self).__init__()
+        self.embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
         self.layers = nn.ModuleList([EncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
 
     def forward(self, x, s_mask):
-        x = x + self.pos_embed(x)
+        x = self.embed(x) + self.pos_embed(x)
         for layer in self.layers:
             x = layer(x, s_mask)
         return x
@@ -221,14 +224,14 @@ class DecoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
 
-    def forward(self, x, enc, t_mask):
+    def forward(self, x, enc, s_mask, t_mask):
         _x = x
         x = self.attn(x, x, x, t_mask)
         x = self.dropout1(x + _x)
         x = self.norm1(x)
 
         _x = x
-        x = self.cross_attn(x, enc, enc, t_mask)
+        x = self.cross_attn(x, enc, enc, s_mask)
         x = self.dropout2(x + _x)
         x = self.norm2(x)
 
@@ -240,15 +243,16 @@ class DecoderLayer(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+    def __init__(self, vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
         super(Decoder, self).__init__()
+        self.embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
         self.layers = nn.ModuleList([DecoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
 
-    def forward(self, x, enc, t_mask):
-        x = x + self.pos_embed(x)
+    def forward(self, x, enc, s_mask, t_mask):
+        x = self.embed(x) + self.pos_embed(x)
         for layer in self.layers:
-            x = layer(x, enc, t_mask)
+            x = layer(x, enc, s_mask, t_mask)
         return x
 
 
@@ -256,6 +260,8 @@ class EncoderDecoder(nn.Module):
     def __init__(self,
                  src_pad_ix,
                  tgt_pad_ix,
+                 src_vocab_size,
+                 tgt_vocab_size,
                  d_model,
                  max_len,
                  num_heads,
@@ -265,17 +271,12 @@ class EncoderDecoder(nn.Module):
         super(EncoderDecoder, self).__init__()
         self.src_pad_ix = src_pad_ix
         self.tgt_pad_ix = tgt_pad_ix
-        self.encoder = Encoder(d_model, max_len, num_heads, d_ff, num_layers, dropout)
-        self.decoder = Decoder(d_model, max_len, num_heads, d_ff, num_layers, dropout)
+        self.encoder = Encoder(src_vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout)
+        self.decoder = Decoder(tgt_vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout)
 
     @staticmethod
-    def make_padding_mask(q, k, pad_idx_q, pad_idx_k):
-        len_q, len_k = q.size(1), k.size(1)
-        q = q.ne(pad_idx_q).unsqueeze(1).unsqueeze(3)
-        q = q.repeat(1, 1, 1, len_k)
-        k = k.ne(pad_idx_k).unsqueeze(1).unsqueeze(3)
-        k = k.repeat(1, 1, 1, len_q)
-        mask = q & k
+    def make_padding_mask(k, pad_idx_k):
+        mask = k.ne(pad_idx_k).unsqueeze(1).unsqueeze(2)
         return mask
 
     @staticmethod
@@ -287,10 +288,10 @@ class EncoderDecoder(nn.Module):
         return mask
 
     def forward(self, src, tgt):
-        s_mask = self.make_padding_mask(src, src, self.src_pad_ix, self.src_pad_ix)
-        t_mask = self.make_padding_mask(tgt, tgt, self.tgt_pad_ix, self.tgt_pad_ix) & self.make_casual_mask(tgt, tgt)
+        s_mask = self.make_padding_mask(src, self.src_pad_ix)
+        t_mask = self.make_padding_mask(tgt, self.tgt_pad_ix) & self.make_casual_mask(tgt, tgt)
         enc = self.encoder(src, s_mask)
-        dec = self.decoder(tgt, enc, t_mask)
+        dec = self.decoder(tgt, enc, s_mask, t_mask)
         return dec
 
 
@@ -323,6 +324,8 @@ if __name__ == '__main__':
     model = EncoderDecoder(
         src_pad_ix=src_pad_ix,
         tgt_pad_ix=tgt_pad_ix,
+        src_vocab_size=vocab_size_src,
+        tgt_vocab_size=vocab_size_tgt,
         d_model=d_model,
         max_len=max_len,
         num_heads=num_heads,
@@ -331,9 +334,10 @@ if __name__ == '__main__':
         dropout=0.1
     )
 
+    print("源序列输入:", src.shape)  # [batch_size, src_len]
+    print("目标序列输入:", tgt.shape)  # [batch_size, tgt_len]
+
     # 前向计算
     out = model(src, tgt)
 
-    print("源序列输入:", src.shape)  # [batch_size, src_len]
-    print("目标序列输入:", tgt.shape)  # [batch_size, tgt_len]
     print("模型输出:", out.shape)  # [batch_size, tgt_len, d_model]
