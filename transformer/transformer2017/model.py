@@ -1,5 +1,3 @@
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -73,6 +71,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 
 class Attention(nn.Module):
+
     def __init__(self, d_model, num_heads, dropout=0.1):
         """
 
@@ -171,6 +170,12 @@ class FeedForward(nn.Module):
 
 class EncoderLayer(nn.Module):
     def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        """
+        :param d_model: 特征维度
+        :param num_heads: 注意力头数量
+        :param d_ff: 前向传播层维度
+        :param dropout: 丢弃概率
+        """
         super(EncoderLayer, self).__init__()
         self.attn = Attention(d_model, num_heads, dropout)
         self.ff = FeedForward(d_model, d_ff, dropout)
@@ -197,6 +202,16 @@ class EncoderLayer(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+        """
+
+        :param vocab_size: 词库大小，构建词嵌入矩阵
+        :param d_model: 特征维度
+        :param max_len: 最大上下文长度
+        :param num_heads: 注意力头数量
+        :param d_ff: 隐藏层维度
+        :param num_layers: 子层数量
+        :param dropout: 丢弃概率
+        """
         super(Encoder, self).__init__()
         self.embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
@@ -211,6 +226,12 @@ class Encoder(nn.Module):
 
 class DecoderLayer(nn.Module):
     def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        """
+        :param d_model: 特征维度
+        :param num_heads: 注意力头数量
+        :param d_ff: 前向传播层维度
+        :param dropout: 丢弃概率
+        """
         super(DecoderLayer, self).__init__()
         self.attn = Attention(d_model, num_heads, dropout)
         self.cross_attn = Attention(d_model, num_heads, dropout)
@@ -244,6 +265,15 @@ class DecoderLayer(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, vocab_size, d_model, max_len, num_heads, d_ff, num_layers, dropout=0.1):
+        """
+        :param vocab_size: 词库大小，构建词嵌入矩阵
+        :param d_model: 特征维度
+        :param max_len: 最大上下文长度
+        :param num_heads: 注意力头数量
+        :param d_ff: 隐藏层维度
+        :param num_layers: 子层数量
+        :param dropout: 丢弃概率
+        """
         super(Decoder, self).__init__()
         self.embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = SinusoidalPositionalEncoding(max_len, d_model, dropout)
@@ -257,17 +287,21 @@ class Decoder(nn.Module):
 
 
 class EncoderDecoder(nn.Module):
-    def __init__(self,
-                 src_pad_ix,
-                 tgt_pad_ix,
-                 src_vocab_size,
-                 tgt_vocab_size,
-                 d_model,
-                 max_len,
-                 num_heads,
-                 d_ff,
-                 num_layers,
-                 dropout=0.1):
+    def __init__(self, src_pad_ix, tgt_pad_ix, src_vocab_size, tgt_vocab_size, d_model, max_len, num_heads, d_ff,
+                 num_layers, dropout=0.1):
+        """
+
+        :param src_pad_ix: 源序列中 padding 位置
+        :param tgt_pad_ix: 目标序列中 padding 位置
+        :param src_vocab_size: 源序列词库大小
+        :param tgt_vocab_size: 目标序列词库大小
+        :param d_model: 特征维度
+        :param max_len: 最大上下文长度
+        :param num_heads: 注意力头大小
+        :param d_ff: 隐藏层维度
+        :param num_layers: 子层数量
+        :param dropout: 丢弃概率
+        """
         super(EncoderDecoder, self).__init__()
         self.src_pad_ix = src_pad_ix
         self.tgt_pad_ix = tgt_pad_ix
@@ -334,10 +368,10 @@ if __name__ == '__main__':
         dropout=0.1
     )
 
-    print("源序列输入:", src.shape)  # [batch_size, src_len]
-    print("目标序列输入:", tgt.shape)  # [batch_size, tgt_len]
+    print("源序列输入:", src)  # [batch_size, src_len]
+    print("目标序列输入:", tgt)  # [batch_size, tgt_len]
 
     # 前向计算
     out = model(src, tgt)
 
-    print("模型输出:", out.shape)  # [batch_size, tgt_len, d_model]
+    print("模型输出:", out)  # [batch_size, tgt_len, d_model]
