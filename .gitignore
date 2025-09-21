@@ -1,2 +1,4 @@
 .venv
 .idea
+
+transformer/gpt/model
