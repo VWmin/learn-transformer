@@ -143,8 +143,6 @@ class FeedForward(nn.Module):
         :param dropout: 丢弃概率
         """
         super(FeedForward, self).__init__()
-        self.d_model = d_model
-        self.d_ff = d_ff
         self.dropout = nn.Dropout(dropout)
         # 上投影矩阵，映射到一个隐藏层维度
         # 已经包含了bias
