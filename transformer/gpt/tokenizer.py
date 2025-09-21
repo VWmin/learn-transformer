@@ -40,7 +40,7 @@ def read_texts_from_jsonl(filepath, max_sample=100):
             yield data['text']
 
 datapath = "D:\workspace\minimind\dataset\pretrain_hq.jsonl"
-texts = read_texts_from_jsonl(datapath, 0x7fffffff)
+texts = read_texts_from_jsonl(datapath, 1000)
 
 # 训练 tokenizer
 tokenizer.train_from_iterator(texts, trainer=trainer)
