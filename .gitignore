@@ -2,3 +2,5 @@
 .idea
 
 transformer/gpt/model
+
+handwritten-digits/mnist-dataset
