@@ -87,7 +87,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     # 4）训练 评估
-    epochs = 60
+    epochs = 12
     for epoch in range(epochs):
         # train
         train_acc, train_loss = model_train(criterion, device, model, optimizer, train_dl)
@@ -114,7 +114,6 @@ def main():
             logits = model(image)
             pred = logits.argmax(dim=1).item()
             print(pred)
-
 
 
 def model_eval(criterion, device, model, test_dl):
