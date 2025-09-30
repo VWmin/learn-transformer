@@ -1,7 +1,6 @@
 import random
 
 import numpy as np
-from networkx.algorithms.flow import minimum_cut
 
 
 def sigmoid(x):
@@ -123,3 +122,14 @@ class Network:
 
     def cost_derivative(self, output_activations, y):
         return output_activations - y
+
+
+if __name__ == '__main__':
+    import mnist_loader2 as mnist_loader
+
+    training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
+    training_data, validation_data, test_data = list(training_data), list(validation_data), list(test_data)
+
+    model = Network([784, 16, 16, 10])
+    model.SGD(training_data, 60, 256, 0.1)
+    print(model.evaluate(test_data))
