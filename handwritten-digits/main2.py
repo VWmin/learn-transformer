@@ -102,15 +102,16 @@ class Network:
             activations.append(activation)
 
         # backward pass
-        delta = self.cost_derivative(activations[-1], y) * sigmoid_prime(zs[-1])  # 输出层误差 * 多元函数偏导的链式法则
+        # 计算最后一层的权重和偏置偏导
+        delta = self.cost_derivative(activations[-1], y) * sigmoid_prime(zs[-1])  # 对权重求偏导的链式法则；这里去掉了系数2，因为其可以被学习率吸收
         nabla_w[-1] = np.dot(delta, activations[-2].transpose())  # 权重梯度
         nabla_b[-1] = delta  # 偏置项梯度
 
-        # 隐藏层反向传播（从倒数第二层往后传播），计算过程同上
+        # 计算从倒数第二层往前的权重和偏置偏导
         for l in range(2, self.layers):
-            delta = np.dot(self.weights[-l + 1].transpose(), delta) * sigmoid_prime(zs[-l])
-            nabla_w[-l] = np.dot(delta, activations[-l - 1].transpose())
-            nabla_b[-l] = delta
+            delta = np.dot(self.weights[-l + 1].transpose(), delta) * sigmoid_prime(zs[-l])  # 更新本层delta
+            nabla_w[-l] = np.dot(delta, activations[-l - 1].transpose())  # 权重梯度
+            nabla_b[-l] = delta  # 偏置项梯度
         return nabla_w, nabla_b
 
     def evaluate(self, test_data):
