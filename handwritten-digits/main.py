@@ -12,13 +12,17 @@ from mnist_loader import show_images, MnistDataloader
 class FeedForward(nn.Module):
     def __init__(self, resolution, hidden_size=16, hidden_layers=2, dropout=0.1):
         super(FeedForward, self).__init__()
+        # 这里更好的写法是输入一个内容为各层神经元数量的数组
+        # 输入的维度是图片解析度大小，然后映射到隐藏层大小
         self.input_ff = nn.Linear(resolution * resolution, hidden_size)
+        # 指定数量的隐藏层
         self.ff_list = nn.ModuleList([nn.Linear(hidden_size, hidden_size) for _ in range(hidden_layers - 1)])
+        # 输出到 0 - 9 到特征
         self.output_ff = nn.Linear(hidden_size, 10)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # x: [B, 28, 28] or [B, 784]
+        # 适应输入可能的两种形状 x: [B, 28, 28] or [B, 784]
         if x.dim() == 3:
             x = x.view(x.size(0), -1)
         x = self.dropout(F.relu(self.input_ff(x)))
@@ -29,6 +33,9 @@ class FeedForward(nn.Module):
 
 
 class HandwrittenDigitsClassifier(nn.Module):
+    """
+    手写数字分类器
+    """
     def __init__(self, resolution, hidden_size=16, hidden_layers=2, dropout=0.1):
         super(HandwrittenDigitsClassifier, self).__init__()
         self.ff = FeedForward(resolution, hidden_size, hidden_layers, dropout)
@@ -75,6 +82,7 @@ def main():
     y_test = torch.tensor(y_test, dtype=torch.long)
 
     # 2）DataLoader
+    # 定义数据集和数据加载器
     train_ds = TensorDataset(x_train, y_train)
     test_ds = TensorDataset(x_test, y_test)
     train_dl = DataLoader(train_ds, batch_size=128, shuffle=True)
@@ -83,8 +91,8 @@ def main():
     # 3）模型/损失/优化器/设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HandwrittenDigitsClassifier(28).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.CrossEntropyLoss()  # 损失函数，作为更新参数的依据
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # 优化器，帮助更新参数
 
     # 4）训练 评估
     epochs = 12
@@ -138,6 +146,7 @@ def model_eval(criterion, device, model, test_dl):
 
 
 def model_train(criterion, device, model, optimizer, train_dl):
+    # 告诉模型进入训练模式
     model.train()
     running_loss = 0.0
     correct = 0
@@ -145,10 +154,16 @@ def model_train(criterion, device, model, optimizer, train_dl):
     for inputs, target in train_dl:
         inputs, targets = inputs.to(device), target.to(device)
 
+        # 清空上一个样本的梯度
         optimizer.zero_grad()
+        # 得到模型预测值
         logits = model(inputs)
+        # 通过损失函数计算 loss 对象（包含损失值），反向传播过程并不需要具体的损失值，但是有损失值可以方便我们监控训练的进度
+        # 例如模型是否在收敛、学习率是否合适、是否发生过拟合
         loss = criterion(logits, targets)
+        # 反向传播（计算梯度）
         loss.backward()
+        # 更新参数
         optimizer.step()
 
         running_loss += loss.item() * inputs.size(0)
