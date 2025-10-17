@@ -40,16 +40,15 @@ class SinusoidalPositionalEncoding(nn.Module):
     def __init__(self, max_len, d_model, dropout=.1):
         super(SinusoidalPositionalEncoding, self).__init__()
         w = torch.arange(max_len).reshape(-1, 1) / torch.pow(10000, torch.arange(0, d_model, 2) / d_model)
-        self.PE = torch.zeros(max_len, d_model)
-        self.PE[:, 0::2] = torch.sin(w)
-        self.PE[:, 1::2] = torch.cos(w)
-        self.requires_grad_ = False
+        PE = torch.zeros(max_len, d_model)
+        PE[:, 0::2] = torch.sin(w)
+        PE[:, 1::2] = torch.cos(w)
+        self.register_buffer('PE', PE)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
         batch_size, seq_len = x.size()
-        pe = self.PE[:seq_len, :]
-        pe = pe.unsqueeze_(0)
+        pe = self.PE[:seq_len, :].unsqueeze(0)
         return self.dropout(pe)
 
 
@@ -81,18 +80,19 @@ class Attention(nn.Module):
         xk = xk.permute(0, 2, 1, 3)
         xv = xv.permute(0, 2, 1, 3)
         # [batch_size, num_heads, seq_len, seq_len]
-        scores = xq @ xk.transpose(-2, -1) / torch.sqrt(torch.tensor(self.head_dim))
+        scores = xq @ xk.transpose(-2, -1) / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float('-inf'))
         scores = F.softmax(scores, dim=-1)
+        scores = self.dropout(scores)
         # [batch_size, num_heads, seq_len, head_dim]
         output = scores @ xv
         # [batch_size, seq_len, num_heads, head_dim]
         output = output.permute(0, 2, 1, 3).contiguous()
-        # [bath_size, seq_len, d_model]
+        # [batch_size, seq_len, d_model]
         output = output.view(batch_size, seq_len, self.d_model)
         output = self.o_proj(output)
-        return self.dropout(output)
+        return output
 
 class FeedForward(nn.Module):
     def __init__(self, d_model, d_ff, dropout=.1):
@@ -121,11 +121,11 @@ class DecoderOnlyLayer(nn.Module):
     def forward(self, x, mask=None):
         _x = x
         x = self.attn(x, mask)
-        x = self.dropout1(x + _x)
+        x = _x + self.dropout1(x)
         x = self.norm1(x)
         _x = x
         x = self.ff(x)
-        x = self.dropout2(x + _x)
+        x = _x + self.dropout2(x)
         x = self.norm2(x)
         return x
 
@@ -151,7 +151,8 @@ class GPT(nn.Module):
     @staticmethod
     def make_causal_mask(x):
         seq_len = x.size(1)
-        mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool))
+        # 创建下三角矩阵（包括对角线），使得每个位置只能看到之前的位置和自己
+        mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
         # [1, 1, seq_len, seq_len]
         mask = mask.unsqueeze(0).unsqueeze(1)
         return mask
@@ -160,18 +161,3 @@ class GPT(nn.Module):
         causal_mask = self.make_causal_mask(x)
         dec = self.decoder(x, causal_mask)
         return dec
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
